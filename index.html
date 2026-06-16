@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ok Oyunu</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="game-container">
+        <div class="score-board">
+            <div class="score">Skor: <span id="score">0</span></div>
+            <div class="level">Seviye: <span id="level">1</span></div>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div class="game-over hidden">
+            <h2>Oyun Bitti!</h2>
+            <p>Skorunuz: <span id="finalScore">0</span></p>
+            <button id="restartBtn">Yeniden Başla</button>
+        </div>
+    </div>
+    <script src="game.js"></script>
+</body>
+</html>
