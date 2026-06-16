@@ -1,24 +1,275 @@
-<!DOCTYPE html>
-<html lang="tr">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ok Oyunu</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-<body>
-    <div class="game-container">
-        <div class="score-board">
-            <div class="score">Skor: <span id="score">0</span></div>
-            <div class="level">Seviye: <span id="level">1</span></div>
-        </div>
-        <canvas id="gameCanvas"></canvas>
-        <div class="game-over hidden">
-            <h2>Oyun Bitti!</h2>
-            <p>Skorunuz: <span id="finalScore">0</span></p>
-            <button id="restartBtn">Yeniden Başla</button>
-        </div>
-    </div>
-    <script src="game.js"></script>
-</body>
-</html>
+using System;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using UnityEngine;
+using Firebase;
+using Firebase.Database;
+using Firebase.Extensions;
+
+/// <summary>
+/// Firebase Realtime Database Manager - GameXLabTR
+/// GameManager objesine eklenmelidir
+/// </summary>
+public class FirebaseManager : MonoBehaviour
+{
+    public static FirebaseManager Instance { get; private set; }
+
+    [Header("Firebase Settings")]
+    public bool isFirebaseReady = false;
+    private string playerID;
+    
+    private DatabaseReference databaseReference;
+    private DatabaseReference playersReference;
+    private DatabaseReference roomReference;
+    
+    [Header("Room Settings")]
+    [SerializeField] private string roomID = "room_gamexlabtr_001";
+    [SerializeField] private int maxPlayersInRoom = 4;
+    
+    [Header("Connection Status")]
+    public bool isOnline = false;
+    public int connectedPlayersCount = 0;
+    
+    [System.Serializable]
+    public class PlayerData
+    {
+        public string playerID;
+        public string playerName;
+        public float posX;
+        public float posY;
+        public float posZ;
+        public float rotY;
+        public int score;
+        public int health;
+        public long lastUpdate;
+        public bool isBot;
+    }
+    
+    private Dictionary<string, PlayerData> onlinePlayers = new Dictionary<string, PlayerData>();
+    
+    public event Action<PlayerData> OnPlayerJoined;
+    public event Action<string> OnPlayerLeft;
+    public event Action<PlayerData> OnPlayerUpdated;
+
+    void Awake()
+    {
+        if (Instance == null)
+        {
+            Instance = this;
+            DontDestroyOnLoad(gameObject);
+        }
+        else
+        {
+            Destroy(gameObject);
+            return;
+        }
+        
+        playerID = SystemInfo.deviceUniqueIdentifier + "_" + System.DateTime.Now.Ticks;
+    }
+
+    async void Start()
+    {
+        await InitializeFirebase();
+    }
+
+    private async Task InitializeFirebase()
+    {
+        try
+        {
+            var dependencyStatus = await FirebaseApp.CheckAndFixDependenciesAsync();
+            
+            if (dependencyStatus == DependencyStatus.Available)
+            {
+                FirebaseApp app = FirebaseApp.DefaultInstance;
+                databaseReference = FirebaseDatabase.DefaultInstance.RootReference;
+                playersReference = databaseReference.Child("players");
+                roomReference = databaseReference.Child("rooms").Child(roomID);
+                
+                isFirebaseReady = true;
+                isOnline = true;
+                
+                Debug.Log("[GAMEXLABTR] Firebase initialized successfully!");
+                
+                await JoinRoom();
+                ListenToPlayers();
+            }
+            else
+            {
+                Debug.LogError($"[GAMEXLABTR] Firebase initialization failed: {dependencyStatus}");
+                isOnline = false;
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogError($"[GAMEXLABTR] Firebase error: {e.Message}");
+            isOnline = false;
+        }
+    }
+
+    private async Task JoinRoom()
+    {
+        if (!isFirebaseReady) return;
+
+        PlayerData newPlayer = new PlayerData
+        {
+            playerID = playerID,
+            playerName = "Player_" + UnityEngine.Random.Range(1000, 9999),
+            posX = 0,
+            posY = 0,
+            posZ = 0,
+            rotY = 0,
+            score = 0,
+            health = 100,
+            lastUpdate = GetCurrentTimestamp(),
+            isBot = false
+        };
+
+        try
+        {
+            string json = JsonUtility.ToJson(newPlayer);
+            await roomReference.Child("players").Child(playerID).SetRawJsonValueAsync(json);
+            Debug.Log("[GAMEXLABTR] Joined room: " + roomID);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[GAMEXLABTR] Join room error: " + e.Message);
+        }
+    }
+
+    private void ListenToPlayers()
+    {
+        if (!isFirebaseReady) return;
+
+        roomReference.Child("players").ValueChanged += (object sender, ValueChangedEventArgs args) =>
+        {
+            if (args.DatabaseError != null)
+            {
+                Debug.LogError("[GAMEXLABTR] Database error: " + args.DatabaseError.Message);
+                return;
+            }
+
+            connectedPlayersCount = (int)args.Snapshot.ChildrenCount;
+
+            foreach (var childSnapshot in args.Snapshot.Children)
+            {
+                string json = childSnapshot.GetRawJsonValue();
+                PlayerData playerData = JsonUtility.FromJson<PlayerData>(json);
+
+                if (playerData.playerID == playerID) continue;
+
+                if (!onlinePlayers.ContainsKey(playerData.playerID))
+                {
+                    onlinePlayers.Add(playerData.playerID, playerData);
+                    OnPlayerJoined?.Invoke(playerData);
+                    Debug.Log($"[GAMEXLABTR] New player joined: {playerData.playerName}");
+                }
+                else
+                {
+                    onlinePlayers[playerData.playerID] = playerData;
+                    OnPlayerUpdated?.Invoke(playerData);
+                }
+            }
+
+            List<string> playersToRemove = new List<string>();
+            foreach (var kvp in onlinePlayers)
+            {
+                bool stillExists = false;
+                foreach (var childSnapshot in args.Snapshot.Children)
+                {
+                    PlayerData pd = JsonUtility.FromJson<PlayerData>(childSnapshot.GetRawJsonValue());
+                    if (pd.playerID == kvp.Key)
+                    {
+                        stillExists = true;
+                        break;
+                    }
+                }
+
+                if (!stillExists)
+                {
+                    playersToRemove.Add(kvp.Key);
+                }
+            }
+
+            foreach (string id in playersToRemove)
+            {
+                onlinePlayers.Remove(id);
+                OnPlayerLeft?.Invoke(id);
+                Debug.Log($"[GAMEXLABTR] Player left: {id}");
+            }
+        };
+    }
+
+    public async Task UpdatePlayerData(Vector3 position, float rotationY, int score, int health)
+    {
+        if (!isFirebaseReady || !isOnline) return;
+
+        try
+        {
+            Dictionary<string, object> updates = new Dictionary<string, object>
+            {
+                { "posX", position.x },
+                { "posY", position.y },
+                { "posZ", position.z },
+                { "rotY", rotationY },
+                { "score", score },
+                { "health", health },
+                { "lastUpdate", GetCurrentTimestamp() }
+            };
+
+            await roomReference.Child("players").Child(playerID).UpdateChildrenAsync(updates);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[GAMEXLABTR] Update error: " + e.Message);
+        }
+    }
+
+    public async Task UpdateScore(int newScore)
+    {
+        if (!isFirebaseReady || !isOnline) return;
+
+        try
+        {
+            await roomReference.Child("players").Child(playerID).Child("score").SetValueAsync(newScore);
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[GAMEXLABTR] Score update error: " + e.Message);
+        }
+    }
+
+    public async Task LeaveRoom()
+    {
+        if (!isFirebaseReady) return;
+
+        try
+        {
+            await roomReference.Child("players").Child(playerID).RemoveValueAsync();
+            Debug.Log("[GAMEXLABTR] Left room");
+        }
+        catch (Exception e)
+        {
+            Debug.LogError("[GAMEXLABTR] Leave room error: " + e.Message);
+        }
+    }
+
+    public Dictionary<string, PlayerData> GetOnlinePlayers()
+    {
+        return onlinePlayers;
+    }
+
+    private long GetCurrentTimestamp()
+    {
+        return DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    }
+
+    async void OnApplicationQuit()
+    {
+        await LeaveRoom();
+    }
+
+    public string GetPlayerID()
+    {
+        return playerID;
+    }
+}
