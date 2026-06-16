@@ -1,0 +1,292 @@
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+// Canvas boyutunu ayarla
+canvas.width = 800;
+canvas.height = 600;
+
+// Oyun değişkenleri
+let score = 0;
+let level = 1;
+let gameRunning = true;
+let animationId;
+
+// Oyuncu (Yay)
+const player = {
+    x: 50,
+    y: canvas.height / 2,
+    width: 40,
+    height: 60,
+    speed: 5,
+    dy: 0
+};
+
+// Oklar
+let arrows = [];
+const arrowSpeed = 8;
+
+// Hedefler
+let targets = [];
+let targetSpeed = 2;
+const targetInterval = 2000; // 2 saniye
+let lastTargetTime = 0;
+
+// Klavye kontrolleri
+const keys = {
+    ArrowUp: false,
+    ArrowDown: false,
+    Space: false
+};
+
+// Event Listeners
+document.addEventListener('keydown', (e) => {
+    if (e.code in keys) {
+        keys[e.code] = true;
+        e.preventDefault();
+    }
+});
+
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'Space' && gameRunning) {
+        shootArrow();
+        e.preventDefault();
+    }
+});
+
+document.addEventListener('keyup', (e) => {
+    if (e.code in keys) {
+        keys[e.code] = false;
+        e.preventDefault();
+    }
+});
+
+document.getElementById('restartBtn').addEventListener('click', restartGame);
+
+// Oyuncu çizimi
+function drawPlayer() {
+    // Yay gövdesi
+    ctx.fillStyle = '#8B4513';
+    ctx.fillRect(player.x, player.y, 10, player.height);
+    
+    // Yay kirişi
+    ctx.strokeStyle = '#FFD700';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(player.x + 5, player.y + 30, 20, -Math.PI/2, Math.PI/2);
+    ctx.stroke();
+}
+
+// Ok atma
+function shootArrow() {
+    arrows.push({
+        x: player.x + 40,
+        y: player.y + player.height / 2,
+        width: 30,
+        height: 3,
+        active: true
+    });
+}
+
+// Ok çizimi
+function drawArrows() {
+    ctx.fillStyle = '#FFD700';
+    arrows.forEach(arrow => {
+        if (arrow.active) {
+            // Ok gövdesi
+            ctx.fillRect(arrow.x, arrow.y, arrow.width, arrow.height);
+            // Ok ucu
+            ctx.beginPath();
+            ctx.moveTo(arrow.x + arrow.width, arrow.y);
+            ctx.lineTo(arrow.x + arrow.width + 10, arrow.y + arrow.height / 2);
+            ctx.lineTo(arrow.x + arrow.width, arrow.y + arrow.height);
+            ctx.fill();
+        }
+    });
+}
+
+// Hedef oluşturma
+function createTarget() {
+    const size = 40 + Math.random() * 30;
+    targets.push({
+        x: canvas.width,
+        y: Math.random() * (canvas.height - size),
+        width: size,
+        height: size,
+        active: true,
+        color: `hsl(${Math.random() * 360}, 70%, 60%)`
+    });
+}
+
+// Hedef çizimi
+function drawTargets() {
+    targets.forEach(target => {
+        if (target.active) {
+            // Hedef dairesi
+            ctx.fillStyle = target.color;
+            ctx.beginPath();
+            ctx.arc(
+                target.x + target.width / 2,
+                target.y + target.height / 2,
+                target.width / 2,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+            
+            // İç daire
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(
+                target.x + target.width / 2,
+                target.y + target.height / 2,
+                target.width / 4,
+                0,
+                Math.PI * 2
+            );
+            ctx.fill();
+        }
+    });
+}
+
+// Çarpışma kontrolü
+function checkCollision(arrow, target) {
+    return arrow.x < target.x + target.width &&
+           arrow.x + arrow.width > target.x &&
+           arrow.y < target.y + target.height &&
+           arrow.y + arrow.height > target.y;
+}
+
+// Oyuncu hareketi
+function updatePlayer() {
+    if (keys.ArrowUp) {
+        player.dy = -player.speed;
+    } else if (keys.ArrowDown) {
+        player.dy = player.speed;
+    } else {
+        player.dy = 0;
+    }
+    
+    player.y += player.dy;
+    
+    // Sınır kontrolü
+    if (player.y < 0) player.y = 0;
+    if (player.y + player.height > canvas.height) {
+        player.y = canvas.height - player.height;
+    }
+}
+
+// Okları güncelle
+function updateArrows() {
+    arrows.forEach(arrow => {
+        if (arrow.active) {
+            arrow.x += arrowSpeed;
+            
+            // Ekrandan çıktı mı?
+            if (arrow.x > canvas.width) {
+                arrow.active = false;
+            }
+        }
+    });
+    
+    // Pasif okları temizle
+    arrows = arrows.filter(arrow => arrow.active);
+}
+
+// Hedefleri güncelle
+function updateTargets(currentTime) {
+    // Yeni hedef oluştur
+    if (currentTime - lastTargetTime > targetInterval) {
+        createTarget();
+        lastTargetTime = currentTime;
+    }
+    
+    targets.forEach(target => {
+        if (target.active) {
+            target.x -= targetSpeed;
+            
+            // Ekrandan çıktı mı? (Oyun biter)
+            if (target.x + target.width < 0) {
+                gameOver();
+            }
+            
+            // Ok ile çarpışma kontrolü
+            arrows.forEach(arrow => {
+                if (arrow.active && target.active && checkCollision(arrow, target)) {
+                    arrow.active = false;
+                    target.active = false;
+                    score += 10;
+                    updateScore();
+                    checkLevelUp();
+                }
+            });
+        }
+    });
+    
+    // Pasif hedefleri temizle
+    targets = targets.filter(target => target.active);
+}
+
+// Skor güncelleme
+function updateScore() {
+    document.getElementById('score').textContent = score;
+}
+
+// Seviye atlama
+function checkLevelUp() {
+    const newLevel = Math.floor(score / 100) + 1;
+    if (newLevel > level) {
+        level = newLevel;
+        targetSpeed += 0.5;
+        document.getElementById('level').textContent = level;
+    }
+}
+
+// Oyun bitti
+function gameOver() {
+    gameRunning = false;
+    cancelAnimationFrame(animationId);
+    document.getElementById('finalScore').textContent = score;
+    document.querySelector('.game-over').classList.remove('hidden');
+}
+
+// Oyunu yeniden başlat
+function restartGame() {
+    score = 0;
+    level = 1;
+    targetSpeed = 2;
+    arrows = [];
+    targets = [];
+    player.y = canvas.height / 2;
+    gameRunning = true;
+    
+    updateScore();
+    document.getElementById('level').textContent = level;
+    document.querySelector('.game-over').classList.add('hidden');
+    
+    lastTargetTime = 0;
+    gameLoop(0);
+}
+
+// Ana oyun döngüsü
+function gameLoop(currentTime) {
+    if (!gameRunning) return;
+    
+    // Ekranı temizle
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    
+    // Güncelle
+    updatePlayer();
+    updateArrows();
+    updateTargets(currentTime);
+    
+    // Çiz
+    drawPlayer();
+    drawArrows();
+    drawTargets();
+    
+    // Döngüyü devam ettir
+    animationId = requestAnimationFrame(gameLoop);
+}
+
+// Oyunu başlat
+gameLoop(0);
